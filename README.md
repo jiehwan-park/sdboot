@@ -1,1 +1,1 @@
-# tizen-artik-boot
+# tizen-artik SD Card boot files
