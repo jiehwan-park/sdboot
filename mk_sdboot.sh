@@ -106,7 +106,7 @@ function find_model {
 	TMPNAME=${TARNAME/artik10/found}
 	if [ $TARNAME != $TMPNAME ]; then
 		MODEL="artik10"
-		PARAMS_OFFSET=1031
+		PARAMS_OFFSET=1231
 	fi
 }
 
