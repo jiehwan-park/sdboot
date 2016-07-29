@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 DEVICE=""
 MODEL="artik5"
@@ -61,8 +62,7 @@ function partition_format {
 	USER=user
 	MODULE=modules
 
-	if [[ $USER_SZ -le 100 ]]
-	then
+	if [ $USER_SZ -le 100 ]; then
 		echo "We recommend to use more than 4GB disk"
 		exit 0
 	fi
@@ -77,16 +77,16 @@ function partition_format {
 	echo " "$SYSTEMDATA"	" $DISK"5  	" $DATA_SZ "MB"
 	echo " "$USER"		" $DISK"6  	" $USER_SZ "MB"
 
-	MOUNT_LIST=`mount | grep $DISK | awk '{print $1}'`
+	MOUNT_LIST=`mount | grep -- "$DISK" | awk '{print $1}'`
 	for mnt in $MOUNT_LIST
 	do
-		umount $mnt
+		umount "$mnt"
 	done
 
-	echo "Remove partition table..."                                                
-	dd if=/dev/zero of=$DISK bs=512 count=1 conv=notrunc
+	echo "Remove partition table..."
+	dd if=/dev/zero of="$DISK" bs=512 count=1 conv=notrunc
 
-	sfdisk --in-order --Linux --unit M $DISK <<-__EOF__
+	sfdisk --in-order --Linux --unit M "$DISK" <<-__EOF__
 	4,$BOOT_SZ,0xE,*
 	,$MODULE_SZ,,-
 	,$ROOTFS_SZ,,-
@@ -95,16 +95,16 @@ function partition_format {
 	,$USER_SZ,,-
 	__EOF__
 
-	mkfs.vfat -F 16 ${DISK}1 -n $BOOT
-	mkfs.ext4 -q ${DISK}2 -L $MODULE -F
-	mkfs.ext4 -q ${DISK}3 -L $ROOTFS -F
-	mkfs.ext4 -q ${DISK}5 -L $SYSTEMDATA -F
-	mkfs.ext4 -q ${DISK}6 -L $USER -F
+	mkfs.vfat -F 16 "${DISK}1" -n $BOOT
+	mkfs.ext4 -q "${DISK}2" -L $MODULE -F
+	mkfs.ext4 -q "${DISK}3" -L $ROOTFS -F
+	mkfs.ext4 -q "${DISK}5" -L $SYSTEMDATA -F
+	mkfs.ext4 -q "${DISK}6" -L $USER -F
 }
 
 function find_model {
-	TMPNAME=${TARNAME/artik10/found}
-	if [ $TARNAME != $TMPNAME ]; then
+	TMPNAME="${TARNAME/artik10/found}"
+	if [ "$TARNAME" != "$TMPNAME" ]; then
 		MODEL="artik10"
 		PARAMS_OFFSET=1231
 	fi
@@ -112,96 +112,96 @@ function find_model {
 
 function write_image {
 	echo "writing $FILENAME ..."
-	if [ $FILENAME == $BL1 ]; then
-		dd if=$FOLDERNAME"/"$BL1 of=$DEVICE bs=512 seek=$BL1_OFFSET conv=notrunc
-		return
+	if [ "$FILENAME" = "$BL1" ]; then
+		dd if="$FOLDERNAME/$BL1" of="${DEVICE}" bs=512 seek=$BL1_OFFSET conv=notrunc
+		return $?
 	fi
-	if [ $FILENAME == $BL2 ]; then
-		dd if=$FOLDERNAME"/"$BL2 of=$DEVICE bs=512 seek=$BL2_OFFSET conv=notrunc
-		return
+	if [ "$FILENAME" = "$BL2" ]; then
+		dd if="$FOLDERNAME/$BL2" of="${DEVICE}" bs=512 seek=$BL2_OFFSET conv=notrunc
+		return $?
 	fi
-	if [ $FILENAME == $UBOOT ]; then
-		dd if=$FOLDERNAME"/"$UBOOT of=$DEVICE bs=512 seek=$UBOOT_OFFSET conv=notrunc
-		return
+	if [ "$FILENAME" = "$UBOOT" ]; then
+		dd if="$FOLDERNAME/$UBOOT" of="${DEVICE}" bs=512 seek=$UBOOT_OFFSET conv=notrunc
+		return $?
 	fi
-	if [ $FILENAME == $TZSW ]; then
-		dd if=$FOLDERNAME"/"$TZSW of=$DEVICE bs=512 seek=$TZSW_OFFSET conv=notrunc
-		return
+	if [ "$FILENAME" = "$TZSW" ]; then
+		dd if="$FOLDERNAME/$TZSW" of="${DEVICE}" bs=512 seek=$TZSW_OFFSET conv=notrunc
+		return $?
 	fi
-	if [ $FILENAME == $PARAMS ]; then
-		dd if=$FOLDERNAME"/"$PARAMS of=$DEVICE bs=512 seek=$PARAMS_OFFSET conv=notrunc
-		return
+	if [ "$FILENAME" = "$PARAMS" ]; then
+		dd if="$FOLDERNAME/$PARAMS" of="${DEVICE}" bs=512 seek=$PARAMS_OFFSET conv=notrunc
+		return $?
 	fi
 
-	if [ $FILENAME == $INITRD ] || [ $FILENAME == $KERNEL ] || [ $FILENAME == $DTBARTIK5 ] || [ $FILENAME == $DTBARTIK10 ]; then
-		mkdir $FOLDERTMP
-		mount ${DEVICE}1 $FOLDERTMP
-		cp $FOLDERNAME"/"$FILENAME $FOLDERTMP
+	if [ "$FILENAME" = "$INITRD" ] || [ "$FILENAME" = "$KERNEL" ] || [ "$FILENAME" = "$DTBARTIK5" ] || [ "$FILENAME" = "$DTBARTIK10" ]; then
+		mkdir -p "$FOLDERTMP"
+		mount "${DEVICE}1" "$FOLDERTMP"
+		cp "$FOLDERNAME/$FILENAME" "$FOLDERTMP/"
 		sync
-		umount $FOLDERTMP
-		rm -rf $FOLDERTMP
+		umount "$FOLDERTMP"
+		rm -rf "$FOLDERTMP"
 		sync
-		return
+		return $?
 	fi
 
-	if [ $FILENAME == $MODULESIMG ]; then
-		dd if=$FOLDERNAME"/"$FILENAME of=${DEVICE}${MODULESPART} bs=1M
-		return
+	if [ "$FILENAME" = "$MODULESIMG" ]; then
+		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${MODULESPART}" bs=1M
+		return $?
 	fi
 
-	if [ $FILENAME == $ROOTFSIMG ]; then
-		dd if=$FOLDERNAME"/"$FILENAME of=${DEVICE}${ROOTFSPART} bs=1M
-		return
+	if [ "$FILENAME" = "$ROOTFSIMG" ]; then
+		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${ROOTFSPART}" bs=1M
+		return $?
 	fi
 
-	if [ $FILENAME == $SYSTEMDATAIMG ]; then
-		dd if=$FOLDERNAME"/"$FILENAME of=${DEVICE}${SYSTEMDATAPART} bs=1M
-		return
+	if [ "$FILENAME" = "$SYSTEMDATAIMG" ]; then
+		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${SYSTEMDATAPART}" bs=1M
+		return $?
 	fi
 
-	if [ $FILENAME == $USERIMG ]; then
-		dd if=$FOLDERNAME"/"$FILENAME of=${DEVICE}${USERPART} bs=1M
-		return
+	if [ "$FILENAME" = "$USERIMG" ]; then
+		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${USERPART}" bs=1M
+		return $?
 	fi
 }
 
 function write_images {
-	FOLDERNAME=${TARNAME%%.*}
+	FOLDERNAME="${TARNAME%%.*}"
 	find_model
 
-	mkdir $FOLDERNAME
-	for FILENAME in `tar xvf $TARNAME -C $FOLDERNAME`
+	mkdir -p "$FOLDERNAME"
+	for FILENAME in `tar xvf "$TARNAME" -C "$FOLDERNAME"`
 	do
 		write_image
 		sync
 	done
-	rm -rf $FOLDERNAME
+	rm -rf -- "$FOLDERNAME"
 }
 
 function cmd_run {
-	if [ "$DEVICE" == "/dev/sdX" ]; then
+	if [ "$DEVICE" = "/dev/sdX" ]; then
 		echo "Just replace the /dev/sdX for your device!"
 		show_usage
 		exit 0
 	fi
-	
-	if [ "$WRITE" == "1" ]; then
-		if [ "$DEVICE" == "" ] || [ "$TARNAME" == "" ]; then
+
+	if [ "$WRITE" = "1" ]; then
+		if [ "$DEVICE" = "" ] || [ "$TARNAME" = "" ]; then
 			show_usage
 			exit 0
 		fi
-	
+
 		echo " === Start writing $TARNAME images === "
 		write_images
 		echo " === end writing $TARNAME images === "
 	fi
 
-	if [ "$FORMAT" == "1" ]; then
-		if [ "$DEVICE" == "" ]; then
+	if [ "$FORMAT" = "1" ]; then
+		if [ "$DEVICE" = "" ]; then
 			show_usage
 			exit 0
 		fi
-		
+
 		echo " === Start $DEVICE format === "
 		partition_format
 		echo " === end $DEVICE format === "
@@ -209,27 +209,27 @@ function cmd_run {
 }
 
 function check_args {
-	if [ "$WRITE" == "" ] && [ "$FORMAT" == "" ]; then
+	if [ "$WRITE" = "" ] && [ "$FORMAT" = "" ]; then
 		show_usage
 		exit 0
 	fi
 }
 
 while test $# -ne 0; do
-	option=$1
+	option="$1"
 	shift
 
 	case $option in
 		-f|--format)
 			FORMAT="1"
-			DEVICE=$1
+			DEVICE="$1"
 			shift
 			;;
 		-w|--write)
 			WRITE="1"
-			DEVICE=$1
+			DEVICE="$1"
 			shift
-			TARNAME=$1
+			TARNAME="$1"
 			shift
 			;;
 		*)
