@@ -29,11 +29,11 @@ function setup_env {
 	if [ $MODEL = "artik5" ]; then
 		KERNEL_DTB="exynos3250-artik5.dtb"
 		BOOT_PART_TYPE=vfat
-		env_offset=1031
+		env_offset=4159
 	elif [ $MODEL = "artik10" ]; then
 		KERNEL_DTB="exynos5422-artik10.dtb"
 		BOOT_PART_TYPE=vfat
-		env_offset=1231
+		env_offset=4159
 	fi
 
 	BL1="bl1.bin"
@@ -47,13 +47,8 @@ function setup_env {
 	BL1_OFFSET=1
 	BL2_OFFSET=31
 	UBOOT_OFFSET=63
-	TZSW_OFFSET=719
-	ENV_OFFSET=$env_offset
-	#BL1_OFFSET=1
-	#BL2_OFFSET=31
-	#UBOOT_OFFSET=63
-	#TZSW_OFFSET=2111
-	#ENV_OFFSET=4159
+	TZSW_OFFSET=2111
+	ENV_OFFSET=4159
 
 	SKIP_BOOT_SIZE=4
 	BOOT_SIZE=32
@@ -124,7 +119,7 @@ function show_usage {
 	echo " -d, --disk <name>		Disk name ex) -d /dev/sd[x]"
 	#echo " -f, --format				Format & Partition the Disk"
 	echo " -r, --recovery			Make a microsd recovery image"
-	echo " -b, --prebuilt-image <file>	Prebuilt file name; defulat value is tizen-sd-boot-[model].tar.gz"
+	echo " -b, --prebuilt-image <file>	Prebuilt file name; defulat is tizen-sd-boot-[model].tar.gz"
 	echo " -p, --platform-image <file>	Platform file name"
 	echo ""
 	exit 0
