@@ -1,242 +1,426 @@
 #!/bin/bash
-set -e
 
 DEVICE=""
 MODEL="artik5"
-FORMAT=""
-WRITE=""
-TARNAME=""
-FILENAME=""
-FOLDERNAME=""
-FOLDERTMP="tizen_boot"
+MODEL_LIST=("artik5" "artik10")
+FORMAT=true
+RECOVERY=false
+PREBUILT_IMAGE=""
+PLATFORM_IMAGE=""
 
-BL1="bl1.bin"
-BL2="bl2.bin"
-UBOOT="u-boot.bin"
-TZSW="tzsw.bin"
-PARAMS="params.bin"
-INITRD="uInitrd"
-KERNEL="zImage"
-DTBARTIK5="exynos3250-artik5.dtb"
-DTBARTIK10="exynos5422-artik10.dtb"
-MODULESIMG="modules.img"
-ROOTFSIMG="rootfs.img"
-SYSTEMDATAIMG="system-data.img"
-USERIMG="user.img"
+BUILD_DIR=`pwd`
+TARGET_DIR=""
+SDCARD_SIZE=""
 
+BOOTPART=1
 MODULESPART=2
 ROOTFSPART=3
 SYSTEMDATAPART=5
 USERPART=6
 
-BL1_OFFSET=1
-BL2_OFFSET=31
-UBOOT_OFFSET=63
-TZSW_OFFSET=719
-PARAMS_OFFSET=1031
+SDBOOTIMG="sd_boot.img"
+BOOTIMG="boot.img"
+MODULESIMG="modules.img"
+ROOTFSIMG="rootfs.img"
+SYSTEMDATAIMG="system-data.img"
+USERIMG="user.img"
 
-function show_usage {
-	echo "Usage:"
-	echo " sudo ./mk_sdboot.sh -f /dev/sd[x]"
-	echo " sudo ./mk_sdboot.sh -w /dev/sd[x] <file name>"
-	echo ""
-	echo " Be careful, Just replace the /dev/sd[x] for your device!"
+function setup_env {
+	if [ $MODEL = "artik5" ]; then
+		KERNEL_DTB="exynos3250-artik5.dtb"
+		BOOT_PART_TYPE=vfat
+		env_offset=1031
+	elif [ $MODEL = "artik10" ]; then
+		KERNEL_DTB="exynos5422-artik10.dtb"
+		BOOT_PART_TYPE=vfat
+		env_offset=1231
+	fi
+
+	BL1="bl1.bin"
+	BL2="bl2.bin"
+	UBOOT="u-boot.bin"
+	TZSW="tzsw.bin"
+	PARAMS="params.bin"
+	INITRD="uInitrd"
+	KERNEL="zImage"
+
+	BL1_OFFSET=1
+	BL2_OFFSET=31
+	UBOOT_OFFSET=63
+	TZSW_OFFSET=719
+	ENV_OFFSET=$env_offset
+	#BL1_OFFSET=1
+	#BL2_OFFSET=31
+	#UBOOT_OFFSET=63
+	#TZSW_OFFSET=2111
+	#ENV_OFFSET=4159
+
+	SKIP_BOOT_SIZE=4
+	BOOT_SIZE=32
+	MODULE_SIZE=32
+	if $RECOVERY; then
+		ROOTFS_SIZE=128
+	else
+		ROOTFS_SIZE=2048
+	fi
+	DATA_SIZE=1024
+	USER_SIZE=""
 }
 
-function partition_format {
-	DISK=$DEVICE
-	SIZE=`sfdisk -s $DISK`
-	SIZE_MB=$((SIZE >> 10))
+function die {
+	if [ -n "$1" ]; then echo $1; fi
+	exit 1
+}
 
-	BOOT_SZ=32
-	MODULE_SZ=32
-	ROOTFS_SZ=2048
-	DATA_SZ=256
+function contains {
+	local n=$#
+	local value=${!n}
+	for ((i=1;i < $#;i++)) {
+		if [ "${!i}" == "${value}" ]; then
+			echo "y"
+			return 0
+		fi
+	}
+	echo "n"
+	return 1
+}
 
-	echo $SIZE_MB
-	let "USER_SZ = $SIZE_MB - $BOOT_SZ - $ROOTFS_SZ - $DATA_SZ - $MODULE_SZ - 4"
+function check_options {
+	test $(contains "${MODEL_LIST[@]}" $MODEL) == y || die "The model name ($MODEL) is incorrect. Please, enter supported model name.  [artik5|artik10]"
 
-	BOOT=boot
-	ROOTFS=rootfs
-	SYSTEMDATA=system-data
-	USER=user
-	MODULE=modules
+	setup_env
 
-	if [ $USER_SZ -le 100 ]; then
-		echo "We recommend to use more than 4GB disk"
+	if [ -z $PREBUILT_IMAGE]; then
+		PREBUILT_IMAGE="tizen-sd-boot-"$MODEL".tar.gz"
+	fi
+	test -e $BUILD_DIR/$PREBUILT_IMAGE  || die "file not found : "$PREBUILT_IMAGE
+	test -e $BUILD_DIR/$PLATFORM_IMAGE  || die "file not found : "$PLATFORM_IMAGE
+
+	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
+	SIZE=`sudo sfdisk -s $DEVICE`
+	test "$SIZE" != "" || die "The disk name ($DEVICE) is incorrect. Please, enter valid disk name.  /dev/sd[x]"
+
+	SDCARD_SIZE=$((SIZE >> 10))
+	USER_SIZE=`expr $SDCARD_SIZE - $SKIP_BOOT_SIZE - $BOOT_SIZE - $MODULE_SIZE - $ROOTFS_SIZE - $DATA_SIZE - 2`
+	test 100 -lt $USER_SIZE || die  "We recommend to use more than 4GB disk"
+
+	if [ $FORMAT == false ]; then
+		test -e $DEVICE$USERPART || die "Need to format the disk. Please, use '-f' option."
+	fi
+}
+
+function show_usage {
+	echo ""
+	echo "Usage:"
+	echo " ./mk_sdboot.sh [options]"
+	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -p platform.tar.gz"
+	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -r"
+	echo ""
+	echo " Be careful, Just replace the /dev/sd[x] for your device!"
+	echo ""
+	echo "Options:"
+	echo " -h, --help			Show help options"
+	echo " -m, --model <name>		Model name ex) -m artik5"
+	echo " -d, --disk <name>		Disk name ex) -d /dev/sd[x]"
+	#echo " -f, --format				Format & Partition the Disk"
+	echo " -r, --recovery			Make a microsd recovery image"
+	echo " -b, --prebuilt-image <file>	Prebuilt file name; defulat value is tizen-sd-boot-[model].tar.gz"
+	echo " -p, --platform-image <file>	Platform file name"
+	echo ""
+	exit 0
+}
+
+function parse_options {
+	if [ $# -lt 1 ]; then
+		show_usage
 		exit 0
 	fi
+
+	for opt in  "$@"
+	do
+		case "$opt" in
+			-h|--help)
+				show_usage
+				shift ;;
+			-m|--model)
+				MODEL="$2"
+				shift ;;
+			-d|--disk)
+				DEVICE=$2
+				shift ;;
+			#-f|--format)
+			#	FORMAT=true
+			#	shift ;;
+			-r|--recovery)
+				RECOVERY=true
+				shift ;;
+			-b|--prebuilt-image)
+				PREBUILT_IMAGE=$2
+				shift ;;
+			-p|--platform-image)
+				PLATFORM_IMAGE=$2
+				shift ;;
+			*)
+				shift ;;
+		esac
+	done
+
+	check_options
+}
+
+########## Start make_sdbootimg ##########
+
+exynos_sdboot_gen()
+{
+	local SD_BOOT_SZ=`expr $ENV_OFFSET + 32`
+
+	pushd ${TARGET_DIR}
+
+	dd if=/dev/zero of=$SDBOOTIMG bs=512 count=$SD_BOOT_SZ
+
+	dd conv=notrunc if=$TARGET_DIR/$BL1 of=$SDBOOTIMG bs=512 seek=$BL1_OFFSET
+	dd conv=notrunc if=$TARGET_DIR/$BL2 of=$SDBOOTIMG bs=512 seek=$BL2_OFFSET
+	dd conv=notrunc if=$TARGET_DIR/$UBOOT of=$SDBOOTIMG bs=512 seek=$UBOOT_OFFSET
+	dd conv=notrunc if=$TARGET_DIR/$TZSW of=$SDBOOTIMG bs=512 seek=$TZSW_OFFSET
+	dd conv=notrunc if=$TARGET_DIR/$PARAMS of=$SDBOOTIMG bs=512 seek=$ENV_OFFSET
+
+	sync; sync;
+
+	popd
+}
+
+make_sdbootimg()
+{
+	test -e $TARGET_DIR/$BL1 || die "file not found : "$BL1
+	test -e $TARGET_DIR/$BL2 || die "file not found : "$BL2
+	test -e $TARGET_DIR/$UBOOT || die "file not found : "$UBOOT
+	test -e $TARGET_DIR/$TZSW || die "file not found : "$TZSW
+
+	if $RECOVERY; then
+		PARAMS="params_recovery.bin"
+	else
+		PARAMS="params_sdboot.bin"
+	fi
+	test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
+
+	exynos_sdboot_gen
+}
+
+########## Start make_bootimg ##########
+
+function gen_bootimg {
+	dd if=/dev/zero of=$BOOTIMG bs=1M count=$BOOT_SIZE
+	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
+		mkfs.vfat -n boot $BOOTIMG
+	elif [ "$BOOT_PART_TYPE" == "ext4" ]; then
+		mkfs.ext4 -F -L boot -b 4096 $BOOTIMG
+	fi
+}
+
+function install_bootimg {
+	test -d mnt || mkdir mnt
+	sudo mount -o loop $BOOTIMG mnt
+
+	sudo su -c "install -m 664 $KERNEL mnt"
+	sudo su -c "install -m 664 $KERNEL_DTB mnt"
+	sudo su -c "install -m 664 $INITRD mnt"
+
+	sync; sync;
+	sudo umount mnt
+
+	rm -rf mnt
+}
+
+function make_bootimg {
+	test -e $TARGET_DIR/$KERNEL || die "file not found : "$KERNEL
+	test -e $TARGET_DIR/$KERNEL_DTB || die "file not found : "$KERNEL_DTB
+	test -e $TARGET_DIR/$INITRD || die "file not found : "$INITRD
+
+	pushd $TARGET_DIR
+
+	gen_bootimg
+	install_bootimg
+
+	popd
+}
+
+########## Start make_recoveryimg ##########
+
+function gen_recoveryimg {
+	dd if=/dev/zero of=$ROOTFSIMG bs=1M count=$ROOTFS_SIZE
+	mkfs.ext4 -F -L rootfs -b 4096 $ROOTFSIMG
+}
+
+function install_recoveryimg {
+	test -d mnt || mkdir mnt
+	sudo mount -o loop $ROOTFSIMG mnt
+
+	sudo su -c "cp $BL1 mnt"
+	sudo su -c "cp $BL2 mnt"
+	sudo su -c "cp $UBOOT mnt"
+	sudo su -c "cp $TZSW mnt"
+	sudo su -c "cp $PARAMS mnt"
+	sudo su -c "cp $KERNEL mnt"
+	sudo su -c "cp $KERNEL_DTB mnt"
+	sudo su -c "cp $INITRD mnt"
+	sudo su -c "cp $BOOTIMG mnt"
+	sudo su -c "cp $MODULESIMG mnt"
+
+	sync; sync;
+	sudo umount mnt
+
+	rm -rf mnt
+}
+
+function make_recoveryimg {
+	PARAMS="params.bin"
+
+	#test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
+
+	pushd $TARGET_DIR
+
+	gen_recoveryimg
+	install_recoveryimg
+
+	popd
+}
+
+########## Start fuse_images ##########
+
+function repartition_sd_recovery {
+	local BOOT=boot
+	local MODULE=modules
+	local ROOTFS=rootfs
 
 	echo "========================================"
 	echo "Label          dev           size"
 	echo "========================================"
-	echo $BOOT"		" $DISK"1  	" $BOOT_SZ "MB"
-	echo $MODULE"		" $DISK"2  	" $MODULE_SZ "MB"
-	echo $ROOTFS"		" $DISK"3  	" $ROOTFS_SZ "MB"
-	echo "[Extend]""	" $DISK"4"
-	echo " "$SYSTEMDATA"	" $DISK"5  	" $DATA_SZ "MB"
-	echo " "$USER"		" $DISK"6  	" $USER_SZ "MB"
+	echo $BOOT"		" $DEVICE"1  	" $BOOT_SIZE "MB"
+	echo $MODULE"		" $DEVICE"2  	" $MODULE_SIZE "MB"
+	echo $ROOTFS"		" $DEVICE"3  	" $ROOTFS_SIZE "MB"
 
-	MOUNT_LIST=`mount | grep -- "$DISK" | awk '{print $1}'`
+	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
 	for mnt in $MOUNT_LIST
 	do
-		umount "$mnt"
+		sudo umount $mnt
 	done
 
-	echo "Remove partition table..."
-	dd if=/dev/zero of="$DISK" bs=512 count=1 conv=notrunc
+	echo "Remove partition table..."                                                
+	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
 
-	sfdisk --in-order --Linux --unit M "$DISK" <<-__EOF__
-	4,$BOOT_SZ,0xE,*
-	,$MODULE_SZ,,-
-	,$ROOTFS_SZ,,-
-	,,E,-
-	,$DATA_SZ,,-
-	,$USER_SZ,,-
+	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+	$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
+	,$MODULE_SIZE,,-
+	,$ROOTFS_SIZE,,-
 	__EOF__
 
-	mkfs.vfat -F 16 "${DISK}1" -n $BOOT
-	mkfs.ext4 -q "${DISK}2" -L $MODULE -F
-	mkfs.ext4 -q "${DISK}3" -L $ROOTFS -F
-	mkfs.ext4 -q "${DISK}5" -L $SYSTEMDATA -F
-	mkfs.ext4 -q "${DISK}6" -L $USER -F
+	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
+		sudo su -c "mkfs.vfat -F 16 $DEVICE$BOOTPART -n $BOOT"
+	elif [ "$BOOT_PART_TYPE" == "ext4" ]; then
+		sudo su -c "mkfs.ext4 -q $DEVICE$BOOTPART -L $BOOT -F"
+	fi
+	sudo su -c "mkfs.ext4 -q $DEVICE$MODULESPART -L $MODULE -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$ROOTFSPART -L $ROOTFS -F"
 }
 
-function find_model {
-	TMPNAME="${TARNAME/artik10/found}"
-	if [ "$TARNAME" != "$TMPNAME" ]; then
-		MODEL="artik10"
-		PARAMS_OFFSET=1231
-	fi
-}
+function repartition_sd_boot {
+	local BOOT=boot
+	local MODULE=modules
+	local ROOTFS=rootfs
+	local SYSTEMDATA=system-data
+	local USER=user
 
-function write_image {
-	echo "writing $FILENAME ..."
-	if [ "$FILENAME" = "$BL1" ]; then
-		dd if="$FOLDERNAME/$BL1" of="${DEVICE}" bs=512 seek=$BL1_OFFSET conv=notrunc
-		return $?
-	fi
-	if [ "$FILENAME" = "$BL2" ]; then
-		dd if="$FOLDERNAME/$BL2" of="${DEVICE}" bs=512 seek=$BL2_OFFSET conv=notrunc
-		return $?
-	fi
-	if [ "$FILENAME" = "$UBOOT" ]; then
-		dd if="$FOLDERNAME/$UBOOT" of="${DEVICE}" bs=512 seek=$UBOOT_OFFSET conv=notrunc
-		return $?
-	fi
-	if [ "$FILENAME" = "$TZSW" ]; then
-		dd if="$FOLDERNAME/$TZSW" of="${DEVICE}" bs=512 seek=$TZSW_OFFSET conv=notrunc
-		return $?
-	fi
-	if [ "$FILENAME" = "$PARAMS" ]; then
-		dd if="$FOLDERNAME/$PARAMS" of="${DEVICE}" bs=512 seek=$PARAMS_OFFSET conv=notrunc
-		return $?
-	fi
+	echo "========================================"
+	echo "Label          dev           size"
+	echo "========================================"
+	echo $BOOT"		" $DEVICE"1  	" $BOOT_SIZE "MB"
+	echo $MODULE"		" $DEVICE"2  	" $MODULE_SIZE "MB"
+	echo $ROOTFS"		" $DEVICE"3  	" $ROOTFS_SIZE "MB"
+	echo "[Extend]""	" $DEVICE"4"
+	echo " "$SYSTEMDATA"	" $DEVICE"5  	" $DATA_SIZE "MB"
+	echo " "$USER"		" $DEVICE"6  	" $USER_SIZE "MB"
 
-	if [ "$FILENAME" = "$INITRD" ] || [ "$FILENAME" = "$KERNEL" ] || [ "$FILENAME" = "$DTBARTIK5" ] || [ "$FILENAME" = "$DTBARTIK10" ]; then
-		mkdir -p "$FOLDERTMP"
-		mount "${DEVICE}1" "$FOLDERTMP"
-		cp "$FOLDERNAME/$FILENAME" "$FOLDERTMP/"
-		sync
-		umount "$FOLDERTMP"
-		rm -rf "$FOLDERTMP"
-		sync
-		return $?
-	fi
-
-	if [ "$FILENAME" = "$MODULESIMG" ]; then
-		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${MODULESPART}" bs=1M
-		return $?
-	fi
-
-	if [ "$FILENAME" = "$ROOTFSIMG" ]; then
-		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${ROOTFSPART}" bs=1M
-		return $?
-	fi
-
-	if [ "$FILENAME" = "$SYSTEMDATAIMG" ]; then
-		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${SYSTEMDATAPART}" bs=1M
-		return $?
-	fi
-
-	if [ "$FILENAME" = "$USERIMG" ]; then
-		dd if="$FOLDERNAME/$FILENAME" of="${DEVICE}${USERPART}" bs=1M
-		return $?
-	fi
-}
-
-function write_images {
-	FOLDERNAME="${TARNAME%%.*}"
-	find_model
-
-	mkdir -p "$FOLDERNAME"
-	for FILENAME in `tar xvf "$TARNAME" -C "$FOLDERNAME"`
+	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
+	for mnt in $MOUNT_LIST
 	do
-		write_image
-		sync
+		sudo umount $mnt
 	done
-	rm -rf -- "$FOLDERNAME"
+
+	echo "Remove partition table..."                                                
+	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
+
+	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+	$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
+	,$MODULE_SIZE,,-
+	,$ROOTFS_SIZE,,-
+	,,E,-
+	,$DATA_SIZE,,-
+	,$USER_SIZE,,-
+	__EOF__
+
+	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
+		sudo su -c "mkfs.vfat -F 16 $DEVICE$BOOTPART -n $BOOT"
+	elif [ "$BOOT_PART_TYPE" == "ext4" ]; then
+		sudo su -c "mkfs.ext4 -q $DEVICE$BOOTPART -L $BOOT -F"
+	fi
+	sudo su -c "mkfs.ext4 -q $DEVICE$MODULESPART -L $MODULE -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$ROOTFSPART -L $ROOTFS -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$SYSTEMDATAPART -L $SYSTEMDATA -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$USERPART -L $USER -F"
 }
 
-function cmd_run {
-	if [ "$DEVICE" = "/dev/sdX" ]; then
-		echo "Just replace the /dev/sdX for your device!"
-		show_usage
-		exit 0
+function fuse_images {
+	if [ -f $TARGET_DIR/$SDBOOTIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$SDBOOTIMG of=$DEVICE bs=512"
 	fi
 
-	if [ "$WRITE" = "1" ]; then
-		if [ "$DEVICE" = "" ] || [ "$TARNAME" = "" ]; then
-			show_usage
-			exit 0
-		fi
-
-		echo " === Start writing $TARNAME images === "
-		write_images
-		echo " === end writing $TARNAME images === "
+	if $RECOVERY; then
+		repartition_sd_recovery
+	else
+		repartition_sd_boot
 	fi
 
-	if [ "$FORMAT" = "1" ]; then
-		if [ "$DEVICE" = "" ]; then
-			show_usage
-			exit 0
-		fi
-
-		echo " === Start $DEVICE format === "
-		partition_format
-		echo " === end $DEVICE format === "
+	if [ -f $TARGET_DIR/$BOOTIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$BOOTIMG of=$DEVICE$BOOTPART bs=1M"
 	fi
+
+	if [ -f $TARGET_DIR/$MODULESIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$MODULESIMG of=$DEVICE$MODULESPART bs=1M"
+	fi
+	
+	if [ -f $TARGET_DIR/$ROOTFSIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$ROOTFSIMG of=$DEVICE$ROOTFSPART bs=1M"
+	fi
+
+	if [ -f $TARGET_DIR/$SYSTEMDATAIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$SYSTEMDATAIMG of=$DEVICE$SYSTEMDATAPART bs=1M"
+	fi
+
+	if [ -f $TARGET_DIR/$USERIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$USERIMG of=$DEVICE$USERPART bs=1M"
+	fi
+
+	sync; sync;
 }
 
-function check_args {
-	if [ "$WRITE" = "" ] && [ "$FORMAT" = "" ]; then
-		show_usage
-		exit 0
-	fi
-}
+##################################
 
-while test $# -ne 0; do
-	option="$1"
-	shift
+parse_options "$@"
 
-	case $option in
-		-f|--format)
-			FORMAT="1"
-			DEVICE="$1"
-			shift
-			;;
-		-w|--write)
-			WRITE="1"
-			DEVICE="$1"
-			shift
-			TARNAME="$1"
-			shift
-			;;
-		*)
-			;;
-	esac
-done
+TARGET_DIR=$BUILD_DIR/$MODEL
+test -d $TARGET_DIR || mkdir -p $TARGET_DIR
 
-check_args
-cmd_run
+tar -xvf $PREBUILT_IMAGE -C $TARGET_DIR
+
+make_sdbootimg
+make_bootimg
+make_recoveryimg
+
+if [ $PLATFORM_IMAGE ]; then
+	tar -xvf $PLATFORM_IMAGE -C $TARGET_DIR
+fi
+
+fuse_images
+
+rm -rf $TARGET_DIR
 
