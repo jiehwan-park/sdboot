@@ -3,9 +3,10 @@
 DEVICE=""
 MODEL="artik5"
 MODEL_LIST=("artik5" "artik10")
-FORMAT=true
+FORMAT=false
 RECOVERY=false
 PREBUILT_IMAGE=""
+BOOT_IMAGE=""
 PLATFORM_IMAGE=""
 
 BUILD_DIR=`pwd`
@@ -89,6 +90,7 @@ function check_options {
 		PREBUILT_IMAGE="tizen-sd-boot-"$MODEL".tar.gz"
 	fi
 	test -e $BUILD_DIR/$PREBUILT_IMAGE  || die "file not found : "$PREBUILT_IMAGE
+	test -e $BUILD_DIR/$BOOT_IMAGE  || die "file not found : "$BOOT_IMAGE
 	test -e $BUILD_DIR/$PLATFORM_IMAGE  || die "file not found : "$PLATFORM_IMAGE
 
 	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
@@ -99,7 +101,7 @@ function check_options {
 	USER_SIZE=`expr $SDCARD_SIZE - $SKIP_BOOT_SIZE - $BOOT_SIZE - $MODULE_SIZE - $ROOTFS_SIZE - $DATA_SIZE - 2`
 	test 100 -lt $USER_SIZE || die  "We recommend to use more than 4GB disk"
 
-	if [ $FORMAT == false ]; then
+	if [ $FORMAT == false ] && [ $RECOVERY == false ] ; then
 		test -e $DEVICE$USERPART || die "Need to format the disk. Please, use '-f' option."
 	fi
 }
@@ -108,8 +110,10 @@ function show_usage {
 	echo ""
 	echo "Usage:"
 	echo " ./mk_sdboot.sh [options]"
-	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -p platform.tar.gz"
+	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -f"
 	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -r"
+	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -b boot.tar.gz"
+	echo " ex) ./mk_sdboot.sh -m atrik5 -d /dev/sd[x] -p platform.tar.gz"
 	echo ""
 	echo " Be careful, Just replace the /dev/sd[x] for your device!"
 	echo ""
@@ -117,9 +121,9 @@ function show_usage {
 	echo " -h, --help			Show help options"
 	echo " -m, --model <name>		Model name ex) -m artik5"
 	echo " -d, --disk <name>		Disk name ex) -d /dev/sd[x]"
-	#echo " -f, --format				Format & Partition the Disk"
+	echo " -f, --format			Format & Partition the Disk"
 	echo " -r, --recovery			Make a microsd recovery image"
-	echo " -b, --prebuilt-image <file>	Prebuilt file name; defulat is tizen-sd-boot-[model].tar.gz"
+	echo " -b, --boot-image <file>	Boot file name"
 	echo " -p, --platform-image <file>	Platform file name"
 	echo ""
 	exit 0
@@ -143,14 +147,14 @@ function parse_options {
 			-d|--disk)
 				DEVICE=$2
 				shift ;;
-			#-f|--format)
-			#	FORMAT=true
-			#	shift ;;
+			-f|--format)
+				FORMAT=true
+				shift ;;
 			-r|--recovery)
 				RECOVERY=true
 				shift ;;
-			-b|--prebuilt-image)
-				PREBUILT_IMAGE=$2
+			-b|--boot-image)
+				BOOT_IMAGE=$2
 				shift ;;
 			-p|--platform-image)
 				PLATFORM_IMAGE=$2
@@ -193,8 +197,11 @@ make_sdbootimg()
 
 	if $RECOVERY; then
 		PARAMS="params_recovery.bin"
-	else
+	elif $FORMAT; then
 		PARAMS="params_sdboot.bin"
+	else
+		PARAMS="params.bin"
+		sed -i -e 's/rootdev=0/rootdev=1/g' $TARGET_DIR/$PARAMS
 	fi
 	test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
 
@@ -364,15 +371,19 @@ function repartition_sd_boot {
 	sudo su -c "mkfs.ext4 -q $DEVICE$USERPART -L $USER -F"
 }
 
-function fuse_images {
-	if [ -f $TARGET_DIR/$SDBOOTIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$SDBOOTIMG of=$DEVICE bs=512"
-	fi
-
+function repartition_sd {
 	if $RECOVERY; then
 		repartition_sd_recovery
-	else
+	elif $FORMAT; then
 		repartition_sd_boot
+	fi
+
+	sync; sync;
+}
+
+function fuse_images {
+	if [ -f $TARGET_DIR/$SDBOOTIMG ]; then
+		sudo su -c "dd if=$TARGET_DIR/$SDBOOTIMG of=$DEVICE bs=512 seek=1 skip=1"
 	fi
 
 	if [ -f $TARGET_DIR/$BOOTIMG ]; then
@@ -382,7 +393,7 @@ function fuse_images {
 	if [ -f $TARGET_DIR/$MODULESIMG ]; then
 		sudo su -c "dd if=$TARGET_DIR/$MODULESIMG of=$DEVICE$MODULESPART bs=1M"
 	fi
-	
+
 	if [ -f $TARGET_DIR/$ROOTFSIMG ]; then
 		sudo su -c "dd if=$TARGET_DIR/$ROOTFSIMG of=$DEVICE$ROOTFSPART bs=1M"
 	fi
@@ -405,11 +416,22 @@ parse_options "$@"
 TARGET_DIR=$BUILD_DIR/$MODEL
 test -d $TARGET_DIR || mkdir -p $TARGET_DIR
 
-tar -xvf $PREBUILT_IMAGE -C $TARGET_DIR
+repartition_sd
 
-make_sdbootimg
-make_bootimg
-make_recoveryimg
+# make sdcard bootloader image
+if $FORMAT || $RECOVERY || [ $BOOT_IMAGE ]; then
+	tar -xvf $PREBUILT_IMAGE -C $TARGET_DIR
+	if [ $BOOT_IMAGE ]; then
+		tar -xvf $BOOT_IMAGE -C $TARGET_DIR
+	fi
+	make_sdbootimg
+	make_bootimg
+fi
+
+# make recovery image
+if $RECOVERY; then
+	make_recoveryimg
+fi
 
 if [ $PLATFORM_IMAGE ]; then
 	tar -xvf $PLATFORM_IMAGE -C $TARGET_DIR
