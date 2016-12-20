@@ -23,20 +23,45 @@ package_check()
 set_envs()
 {
 	if [ $# -lt 1 ]; then
-		echo "Usage: ./build.sh [artik10|artik5]"
+		echo "Usage: ./build.sh [artik10|artik5|artik710]"
 		exit
 	elif [ "$1" = "artik5" ]; then
+		chip_name=espresso3250
 		uboot_defconfig=artik5_config
 		uboot_spl=espresso3250-spl.bin
+		uboot_image=u-boot.bin
+		uboot_dir=u-boot-artik
+		uboot_env_section=.rodata
 		kernel_defconfig=artik5_defconfig
 		kernel_dtb=exynos3250-artik5.dtb
-		output_tar=tizen-sd-boot-artik5.tar.gz
+		kernel_dir=linux-3.10-artik
+		kernel_image=zImage
 	elif [ "$1" = "artik10" ]; then
+		chip_name=smdk5422
 		uboot_defconfig=artik10_config
 		uboot_spl=smdk5422-spl.bin
+		uboot_image=u-boot.bin
+		uboot_dir=u-boot-artik
+		uboot_env_section=.rodata
 		kernel_defconfig=artik10_defconfig
 		kernel_dtb=exynos5422-artik10.dtb
-		output_tar=tizen-sd-boot-artik10.tar.gz
+		kernel_dir=linux-3.10-artik
+		kernel_image=zImage
+	elif [ "$1" = "artik710" ]; then
+		export ARCH=arm64
+		export CROSS_COMPILE=aarch64-linux-gnu-
+
+		chip_name=s5p6818
+		uboot_defconfig=artik710_raptor_config
+		uboot_spl=
+		uboot_image=fip-nonsecure.img
+		uboot_dir=u-boot-artik7
+		uboot_env_section=.rodata.default_environment
+		kernel_defconfig=artik710_raptor_defconfig
+		kernel_dtb=s5p6818-artik710-raptor-*.dtb
+		kernel_dir=linux-artik7
+		kernel_image=Image
+		dtb_suffix=/nexell
 	else
 		exit
 	fi
@@ -45,6 +70,7 @@ set_envs()
 	package_check arm-linux-gnueabihf-gcc gcc-arm-linux-gnueabihf
 
 	ARTIK_BUILD_DIR=`pwd`
+	CHIP_NAME=$chip_name
 	OUTPUT_DIR=$ARTIK_BUILD_DIR/output
 	TARGET_BOARD=$1
 	TARGET_DIR=$OUTPUT_DIR/$TARGET_BOARD
@@ -52,26 +78,27 @@ set_envs()
 	BUILD_DATE=`date +"%Y%m%d"`
 	TARGET_DIR=$TARGET_DIR/$BUILD_DATE
 	
-	BL1="bl1.bin"
-	BL2="bl2.bin"
-	TZSW="tzsw.bin"
+	#BL1="bl1.bin"
+	#BL2="bl2.bin"
+	#TZSW="tzsw.bin"
 
-	UBOOT_DIR=$ARTIK_BUILD_DIR/../u-boot-artik
+	UBOOT_DIR=$ARTIK_BUILD_DIR/../$uboot_dir
 	UBOOT_DEFCONFIG=$uboot_defconfig
 	UBOOT_SPL=$uboot_spl
-	UBOOT_IMAGE=u-boot.bin
-	UBOOT_ENV_SECTION=.rodata
+	UBOOT_IMAGE=$uboot_image
+	UBOOT_ENV_SECTION=$uboot_env_section
 	BOOT_PART_TYPE=vfat
 
-	KERNEL_DIR=$ARTIK_BUILD_DIR/../linux-3.10-artik
-	KERNEL_IMAGE=zImage
+	KERNEL_DIR=$ARTIK_BUILD_DIR/../$kernel_dir
+	KERNEL_IMAGE=$kernel_image
 	KERNEL_DEFCONFIG=$kernel_defconfig
-	DTB_PREFIX_DIR=arch/arm/boot/dts/
-	BUILD_DTB=$kernel_dtb
+	DTB_PREFIX_DIR=arch/${ARCH}/boot/dts${dtb_suffix}
 	KERNEL_DTB=$kernel_dtb
 	PREBUILT_DIR=$ARTIK_BUILD_DIR/prebuilt/$TARGET_BOARD
 	RAMDISK_NAME=uInitrd
 	MODULE_SIZE=32
+
+	OUTPUT_TAR=tizen-sd-boot-${TARGET_BOARD}.tar.gz
 }
 
 die() {
@@ -109,12 +136,52 @@ install_uboot_output()
 	cp $UBOOT_IMAGE $TARGET_DIR
 	chmod 664 params.bin params_*.bin
 	cp params.bin params_* $TARGET_DIR
-	cp u-boot $TARGET_DIR
-	[ -e u-boot.dtb ] && cp u-boot.dtb $TARGET_DIR
+	#cp u-boot $TARGET_DIR
+	#[ -e u-boot.dtb ] && cp u-boot.dtb $TARGET_DIR
 	if [ "$UBOOT_SPL" != "" ]; then
-		cp spl/$UBOOT_SPL $TARGET_DIR/$BL2
+		cp spl/$UBOOT_SPL $TARGET_DIR/bl2.bin
 	fi
 	#cp tools/mkimage $TARGET_DIR
+}
+
+gen_fip_image()
+{
+	if [ "$UBOOT_IMAGE" = "fip-nonsecure.img" ]; then
+		$UBOOT_DIR/output/tools/fip_create/fip_create --dump --bl33 u-boot.bin fip-nonsecure.bin
+	fi
+}
+
+gen_nexell_image()
+{
+	local chip_name=$(echo -n ${CHIP_NAME} | awk '{print toupper($0)}')
+	case "$CHIP_NAME" in
+		s5p4418)
+			nsih_name=raptor-emmc.txt
+			input_file=u-boot.bin
+			output_file=$UBOOT_IMAGE
+			gen_tool=BOOT_BINGEN
+			FIP_LOAD_ADDR=0x43c00000
+			launch_addr=$FIP_LOAD_ADDR
+			;;
+		s5p6818)
+			nsih_name=raptor-64.txt
+			input_file=fip-nonsecure.bin
+			output_file=fip-nonsecure.img
+			hash_file=fip-nonsecure.bin.hash
+			gen_tool=SECURE_BINGEN
+			FIP_LOAD_ADDR=0x7df00000
+			launch_addr=0x00000000
+			;;
+		*)
+			return 0 ;;
+	esac
+
+	tools/nexell/${gen_tool} \
+		-c $UBOOT_DIR/output/$chip_name -t 3rdboot \
+		-n $UBOOT_DIR/tools/nexell/nsih/${nsih_name} \
+		-i $UBOOT_DIR/output/${input_file} \
+		-o $UBOOT_DIR/output/${output_file} \
+		-l $FIP_LOAD_ADDR -e ${launch_addr}
 }
 
 build_uboot()
@@ -128,6 +195,8 @@ build_uboot()
 
 	pushd output
 
+	gen_fip_image
+	gen_nexell_image
 	gen_uboot_envs
 	install_uboot_output
 
@@ -142,6 +211,9 @@ build_uboot()
 
 build_modules()
 {
+	make modules_prepare
+	make modules -j$JOBS
+
 	mkdir -p $TARGET_DIR/modules
 	make modules_install INSTALL_MOD_PATH=$TARGET_DIR/modules INSTALL_MOD_STRIP=1
 	make_ext4fs -b 4096 -L modules \
@@ -152,10 +224,12 @@ build_modules()
 
 install_kernel_output()
 {
-	#cp arch/$ARCH/boot/$KERNEL_IMAGE $TARGET_DIR
-	cat arch/$ARCH/boot/$KERNEL_IMAGE $DTB_PREFIX_DIR/$KERNEL_DTB > $TARGET_DIR/$KERNEL_IMAGE
+	if [ $TARGET_BOARD = "artik5" ] || [ $TARGET_BOARD = "artik10" ]; then
+		cat arch/$ARCH/boot/$KERNEL_IMAGE $DTB_PREFIX_DIR/$KERNEL_DTB > $TARGET_DIR/$KERNEL_IMAGE
+	else
+		cp arch/$ARCH/boot/$KERNEL_IMAGE $TARGET_DIR
+	fi
 	cp $DTB_PREFIX_DIR/$KERNEL_DTB $TARGET_DIR
-	cp vmlinux $TARGET_DIR
 }
 
 build_kernel()
@@ -165,8 +239,7 @@ build_kernel()
 	make distclean
 	make $KERNEL_DEFCONFIG
 	make $KERNEL_IMAGE -j$JOBS
-	make $BUILD_DTB
-	make modules -j$JOBS
+	make dtbs
 
 	build_modules
 	install_kernel_output
@@ -178,27 +251,14 @@ build_kernel()
 
 cp_prebuilt_images()
 {
-	cp $PREBUILT_DIR/$BL1 $TARGET_DIR/
-	cp $PREBUILT_DIR/$TZSW $TARGET_DIR/
-	cp $PREBUILT_DIR/$RAMDISK_NAME $TARGET_DIR/
+	cp $PREBUILT_DIR/* $TARGET_DIR/
 }
 
 tar_output_images()
 {
 	pushd $TARGET_DIR
 
-	tar -zcvf $ARTIK_BUILD_DIR/$output_tar	\
-	$BL1				\
-	$BL2				\
-	$UBOOT_IMAGE		\
-	$TZSW			\
-	params.bin			\
-	params_recovery.bin	\
-	params_sdboot.bin	\
-	$KERNEL_IMAGE		\
-	$KERNEL_DTB		\
-	$RAMDISK_NAME	\
-	modules.img
+	tar -zcvf $ARTIK_BUILD_DIR/$OUTPUT_TAR *
 
 	popd
 }

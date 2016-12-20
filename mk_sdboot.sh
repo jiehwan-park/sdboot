@@ -1,9 +1,10 @@
 #!/bin/bash
 
 DEVICE=""
-MODEL="artik5"
-MODEL_LIST=("artik5" "artik10")
+MODEL=""
+MODEL_LIST=("artik5" "artik10" "artik710")
 FORMAT=false
+CLEARSDCARD=false
 RECOVERY=false
 PREBUILT_IMAGE=""
 BOOT_IMAGE=""
@@ -28,13 +29,27 @@ USERIMG="user.img"
 
 function setup_env {
 	if [ $MODEL = "artik5" ]; then
-		KERNEL_DTB="exynos3250-artik5.dtb"
-		BOOT_PART_TYPE=vfat
+		kernel_dtb="exynos3250-artik5.dtb"
+		kernel=zImage
+		boot_part_type=vfat
 		env_offset=4159
+		sdboot_files=("bl1.bin" "bl2.bin" "u-boot.bin" "tzsw.bin")
+		sdboot_offsets=(1 31 63 2111)
 	elif [ $MODEL = "artik10" ]; then
-		KERNEL_DTB="exynos5422-artik10.dtb"
-		BOOT_PART_TYPE=vfat
+		kernel_dtb="exynos5422-artik10.dtb"
+		kernel=zImage
+		boot_part_type=vfat
 		env_offset=4159
+		sdboot_files=("bl1.bin" "bl2.bin" "u-boot.bin" "tzsw.bin")
+		sdboot_offsets=(1 31 63 2111)
+	elif [ $MODEL = "artik710" ]; then
+		kernel_dtb="s5p6818-artik710-raptor-*"
+		kernel=Image
+		boot_part_type=ext4
+		env_offset=5889
+		recovery_boot_files=("partmap_emmc.txt" "bl1-emmcboot.img" "fip-loader-emmc.img" "fip-secure.img" "fip-nonsecure.img")
+		sdboot_files=("bl1-sdboot.img" "fip-loader-sd.img" "fip-secure.img" "fip-nonsecure.img")
+		sdboot_offsets=(1 129 769 3841)
 	fi
 
 	BL1="bl1.bin"
@@ -43,13 +58,19 @@ function setup_env {
 	TZSW="tzsw.bin"
 	PARAMS="params.bin"
 	INITRD="uInitrd"
-	KERNEL="zImage"
+	KERNEL_DTB=$kernel_dtb
+	KERNEL=$kernel
+	BOOT_PART_TYPE=$boot_part_type
 
-	BL1_OFFSET=1
-	BL2_OFFSET=31
-	UBOOT_OFFSET=63
-	TZSW_OFFSET=2111
-	ENV_OFFSET=4159
+	if [ $recovery_boot_files ]; then
+		RECOVERY_BOOT_FILES=("${recovery_boot_files[@]}")
+	else
+		RECOVERY_BOOT_FILES=("${sdboot_files[@]}")
+	fi
+	SDBOOT_FILES=("${sdboot_files[@]}")
+	SDBOOT_OFFSETS=("${sdboot_offsets[@]}")
+
+	ENV_OFFSET=$env_offset
 
 	SKIP_BOOT_SIZE=4
 	BOOT_SIZE=32
@@ -159,28 +180,26 @@ function parse_options {
 			-p|--platform-image)
 				PLATFORM_IMAGE=$2
 				shift ;;
+			-c|--clear-sdcard)
+				CLEARSDCARD=true
+				shift ;;
 			*)
 				shift ;;
 		esac
 	done
-
-	check_options
 }
 
 ########## Start make_sdbootimg ##########
 
-exynos_sdboot_gen()
-{
+function gen_sdboot_image {
 	local SD_BOOT_SZ=`expr $ENV_OFFSET + 32`
 
 	pushd ${TARGET_DIR}
 
 	dd if=/dev/zero of=$SDBOOTIMG bs=512 count=$SD_BOOT_SZ
-
-	dd conv=notrunc if=$TARGET_DIR/$BL1 of=$SDBOOTIMG bs=512 seek=$BL1_OFFSET
-	dd conv=notrunc if=$TARGET_DIR/$BL2 of=$SDBOOTIMG bs=512 seek=$BL2_OFFSET
-	dd conv=notrunc if=$TARGET_DIR/$UBOOT of=$SDBOOTIMG bs=512 seek=$UBOOT_OFFSET
-	dd conv=notrunc if=$TARGET_DIR/$TZSW of=$SDBOOTIMG bs=512 seek=$TZSW_OFFSET
+	for index in ${!SDBOOT_FILES[*]}; do
+		dd conv=notrunc if=$TARGET_DIR/${SDBOOT_FILES[$index]} of=$SDBOOTIMG bs=512 seek=${SDBOOT_OFFSETS[$index]}
+	done
 	dd conv=notrunc if=$TARGET_DIR/$PARAMS of=$SDBOOTIMG bs=512 seek=$ENV_OFFSET
 
 	sync; sync;
@@ -188,12 +207,11 @@ exynos_sdboot_gen()
 	popd
 }
 
-make_sdbootimg()
-{
-	test -e $TARGET_DIR/$BL1 || die "file not found : "$BL1
-	test -e $TARGET_DIR/$BL2 || die "file not found : "$BL2
-	test -e $TARGET_DIR/$UBOOT || die "file not found : "$UBOOT
-	test -e $TARGET_DIR/$TZSW || die "file not found : "$TZSW
+
+function make_sdbootimg {
+	for index in ${!SDBOOT_FILES[*]}; do
+		test -e $TARGET_DIR/${SDBOOT_FILES[$index]} || die "file not found : "${SDBOOT_FILES[$index]}
+	done
 
 	if $RECOVERY; then
 		PARAMS="params_recovery.bin"
@@ -201,16 +219,16 @@ make_sdbootimg()
 		PARAMS="params_sdboot.bin"
 	else
 		PARAMS="params.bin"
-		sed -i -e 's/rootdev=0/rootdev=1/g' $TARGET_DIR/$PARAMS
+		#sed -i -e 's/rootdev=0/rootdev=1/g' $TARGET_DIR/$PARAMS
 	fi
 	test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
 
-	exynos_sdboot_gen
+	gen_sdboot_image
 }
 
 ########## Start make_bootimg ##########
 
-function gen_bootimg {
+function gen_boot_image {
 	dd if=/dev/zero of=$BOOTIMG bs=1M count=$BOOT_SIZE
 	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
 		mkfs.vfat -n boot $BOOTIMG
@@ -219,7 +237,7 @@ function gen_bootimg {
 	fi
 }
 
-function install_bootimg {
+function install_boot_image {
 	test -d mnt || mkdir mnt
 	sudo mount -o loop $BOOTIMG mnt
 
@@ -235,32 +253,32 @@ function install_bootimg {
 
 function make_bootimg {
 	test -e $TARGET_DIR/$KERNEL || die "file not found : "$KERNEL
-	test -e $TARGET_DIR/$KERNEL_DTB || die "file not found : "$KERNEL_DTB
+	#test -e $TARGET_DIR/$KERNEL_DTB || die "file not found : "$KERNEL_DTB
 	test -e $TARGET_DIR/$INITRD || die "file not found : "$INITRD
 
 	pushd $TARGET_DIR
 
-	gen_bootimg
-	install_bootimg
+	gen_boot_image
+	install_boot_image
 
 	popd
 }
 
 ########## Start make_recoveryimg ##########
 
-function gen_recoveryimg {
+function gen_recovery_image {
 	dd if=/dev/zero of=$ROOTFSIMG bs=1M count=$ROOTFS_SIZE
 	mkfs.ext4 -F -L rootfs -b 4096 $ROOTFSIMG
 }
 
-function install_recoveryimg {
+function install_recovery_image {
 	test -d mnt || mkdir mnt
 	sudo mount -o loop $ROOTFSIMG mnt
 
-	sudo su -c "cp $BL1 mnt"
-	sudo su -c "cp $BL2 mnt"
-	sudo su -c "cp $UBOOT mnt"
-	sudo su -c "cp $TZSW mnt"
+	for index in ${!RECOVERY_BOOT_FILES[*]}; do
+		sudo su -c "cp ${RECOVERY_BOOT_FILES[$index]} mnt"
+	done
+
 	sudo su -c "cp $PARAMS mnt"
 	sudo su -c "cp $KERNEL mnt"
 	sudo su -c "cp $KERNEL_DTB mnt"
@@ -277,12 +295,12 @@ function install_recoveryimg {
 function make_recoveryimg {
 	PARAMS="params.bin"
 
-	#test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
+	test -e $TARGET_DIR/$PARAMS || die "file not found : "$PARAMS
 
 	pushd $TARGET_DIR
 
-	gen_recoveryimg
-	install_recoveryimg
+	gen_recovery_image
+	install_recovery_image
 
 	popd
 }
@@ -371,6 +389,29 @@ function repartition_sd_boot {
 	sudo su -c "mkfs.ext4 -q $DEVICE$USERPART -L $USER -F"
 }
 
+function clear_sdcard {
+	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
+
+	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
+	for mnt in $MOUNT_LIST
+	do
+		sudo umount $mnt
+	done
+
+	SIZE=`sudo sfdisk -s $DEVICE`
+	SDCARD_SIZE=$((SIZE >> 10))
+	USER_SIZE=`expr $SDCARD_SIZE - 4`
+	
+	echo "Remove partition table..." $USER_SIZE
+	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
+
+	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+	4,$USER_SIZE,0xE,*
+	__EOF__
+
+	sudo su -c "mkfs.ext4 -q ${DEVICE}1 -L SDCARD -F"
+}
+
 function repartition_sd {
 	if $RECOVERY; then
 		repartition_sd_recovery
@@ -412,6 +453,14 @@ function fuse_images {
 ##################################
 
 parse_options "$@"
+
+if $CLEARSDCARD; then
+	clear_sdcard
+	sync
+	exit 0
+fi
+
+check_options
 
 TARGET_DIR=$BUILD_DIR/$MODEL
 test -d $TARGET_DIR || mkdir -p $TARGET_DIR
