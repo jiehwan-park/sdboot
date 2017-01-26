@@ -10,8 +10,8 @@ PREBUILT_IMAGE=""
 BOOT_IMAGE=""
 PLATFORM_IMAGE=""
 
-BUILD_DIR=`pwd`
-TARGET_DIR=""
+BUILD_DIR=$(cd "$(dirname "$0")" && pwd)
+TARGET_DIR=`mktemp -d`
 SDCARD_SIZE=""
 
 BOOTPART=1
@@ -111,8 +111,8 @@ function check_options {
 		PREBUILT_IMAGE="tizen-sd-boot-"$MODEL".tar.gz"
 	fi
 	test -e $BUILD_DIR/$PREBUILT_IMAGE  || die "file not found : "$PREBUILT_IMAGE
-	test -e $BUILD_DIR/$BOOT_IMAGE  || die "file not found : "$BOOT_IMAGE
-	test -e $BUILD_DIR/$PLATFORM_IMAGE  || die "file not found : "$PLATFORM_IMAGE
+	test -e $BOOT_IMAGE  || die "file not found : "$BOOT_IMAGE
+	test -e $PLATFORM_IMAGE  || die "file not found : "$PLATFORM_IMAGE
 
 	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
 	SIZE=`sudo sfdisk -s $DEVICE`
@@ -462,14 +462,13 @@ fi
 
 check_options
 
-TARGET_DIR=$BUILD_DIR/$MODEL
 test -d $TARGET_DIR || mkdir -p $TARGET_DIR
 
 repartition_sd
 
 # make sdcard bootloader image
 if $FORMAT || $RECOVERY || [ $BOOT_IMAGE ]; then
-	tar -xvf $PREBUILT_IMAGE -C $TARGET_DIR
+	tar -xvf $BUILD_DIR/$PREBUILT_IMAGE -C $TARGET_DIR
 	if [ $BOOT_IMAGE ]; then
 		tar -xvf $BOOT_IMAGE -C $TARGET_DIR
 	fi
