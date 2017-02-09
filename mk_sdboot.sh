@@ -14,6 +14,7 @@ BUILD_DIR=$(cd "$(dirname "$0")" && pwd)
 TARGET_DIR=`mktemp -d`
 SDCARD_SIZE=""
 
+PART=""
 BOOTPART=1
 MODULESPART=2
 ROOTFSPART=3
@@ -26,6 +27,9 @@ MODULESIMG="modules.img"
 ROOTFSIMG="rootfs.img"
 SYSTEMDATAIMG="system-data.img"
 USERIMG="user.img"
+
+SFDISK_VER=''
+SFDISK_OLD=true
 
 function setup_env {
 	if [ $MODEL = "artik5" ]; then
@@ -115,6 +119,17 @@ function check_options {
 	test -e $PLATFORM_IMAGE  || die "file not found : "$PLATFORM_IMAGE
 
 	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
+	if [[ "$DEVICE" == *"mmcblk"* ]]; then
+		PART="p"
+	fi
+
+	VER_SFDISK=(`sfdisk -v | awk '{print $4}' |sed -e s/[.]/' '/g`)
+	if [ ${VER_SFDISK[0]} -ge 2 ]; then
+		if [ ${VER_SFDISK[0]} -gt 2 ] || [ ${VER_SFDISK[1]} -ge 26 ]; then
+			OLD_SFDISK=false
+		fi
+	fi
+
 	SIZE=`sudo sfdisk -s $DEVICE`
 	test "$SIZE" != "" || die "The disk name ($DEVICE) is incorrect. Please, enter valid disk name.  /dev/sd[x]"
 
@@ -123,7 +138,7 @@ function check_options {
 	test 100 -lt $USER_SIZE || die  "We recommend to use more than 4GB disk"
 
 	if [ $FORMAT == false ] && [ $RECOVERY == false ] ; then
-		test -e $DEVICE$USERPART || die "Need to format the disk. Please, use '-f' option."
+		test -e $DEVICE$PART$USERPART || die "Need to format the disk. Please, use '-f' option."
 	fi
 }
 
@@ -315,9 +330,9 @@ function repartition_sd_recovery {
 	echo "========================================"
 	echo "Label          dev           size"
 	echo "========================================"
-	echo $BOOT"		" $DEVICE"1  	" $BOOT_SIZE "MB"
-	echo $MODULE"		" $DEVICE"2  	" $MODULE_SIZE "MB"
-	echo $ROOTFS"		" $DEVICE"3  	" $ROOTFS_SIZE "MB"
+	echo $BOOT"		" $DEVICE$PART"1  	" $BOOT_SIZE "MB"
+	echo $MODULE"		" $DEVICE$PART"2  	" $MODULE_SIZE "MB"
+	echo $ROOTFS"		" $DEVICE$PART"3  	" $ROOTFS_SIZE "MB"
 
 	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
 	for mnt in $MOUNT_LIST
@@ -328,19 +343,27 @@ function repartition_sd_recovery {
 	echo "Remove partition table..."                                                
 	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
 
-	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
-	$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
-	,$MODULE_SIZE,,-
-	,$ROOTFS_SIZE,,-
-	__EOF__
+	if $OLD_SFDISK; then
+		sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+		$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
+		,$MODULE_SIZE,,-
+		,$ROOTFS_SIZE,,-
+		__EOF__
+	else
+		sudo sfdisk $DEVICE <<-__EOF__
+		${SKIP_BOOT_SIZE}MiB,${BOOT_SIZE}MiB,0xE,*
+		8MiB,${MODULE_SIZE}MiB,,-
+		8MiB,${ROOTFS_SIZE}MiB,,-
+		__EOF__
+	fi
 
 	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
-		sudo su -c "mkfs.vfat -F 16 $DEVICE$BOOTPART -n $BOOT"
+		sudo su -c "mkfs.vfat -F 16 $DEVICE$PART$BOOTPART -n $BOOT"
 	elif [ "$BOOT_PART_TYPE" == "ext4" ]; then
-		sudo su -c "mkfs.ext4 -q $DEVICE$BOOTPART -L $BOOT -F"
+		sudo su -c "mkfs.ext4 -q $DEVICE$PART$BOOTPART -L $BOOT -F"
 	fi
-	sudo su -c "mkfs.ext4 -q $DEVICE$MODULESPART -L $MODULE -F"
-	sudo su -c "mkfs.ext4 -q $DEVICE$ROOTFSPART -L $ROOTFS -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$MODULESPART -L $MODULE -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$ROOTFSPART -L $ROOTFS -F"
 }
 
 function repartition_sd_boot {
@@ -353,12 +376,12 @@ function repartition_sd_boot {
 	echo "========================================"
 	echo "Label          dev           size"
 	echo "========================================"
-	echo $BOOT"		" $DEVICE"1  	" $BOOT_SIZE "MB"
-	echo $MODULE"		" $DEVICE"2  	" $MODULE_SIZE "MB"
-	echo $ROOTFS"		" $DEVICE"3  	" $ROOTFS_SIZE "MB"
-	echo "[Extend]""	" $DEVICE"4"
-	echo " "$SYSTEMDATA"	" $DEVICE"5  	" $DATA_SIZE "MB"
-	echo " "$USER"		" $DEVICE"6  	" $USER_SIZE "MB"
+	echo $BOOT"		" $DEVICE$PART"1  	" $BOOT_SIZE "MB"
+	echo $MODULE"		" $DEVICE$PART"2  	" $MODULE_SIZE "MB"
+	echo $ROOTFS"		" $DEVICE$PART"3  	" $ROOTFS_SIZE "MB"
+	echo "[Extend]""	" $DEVICE$PART"4"
+	echo " "$SYSTEMDATA"	" $DEVICE$PART"5  	" $DATA_SIZE "MB"
+	echo " "$USER"		" $DEVICE$PART"6  	" $USER_SIZE "MB"
 
 	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
 	for mnt in $MOUNT_LIST
@@ -369,28 +392,49 @@ function repartition_sd_boot {
 	echo "Remove partition table..."                                                
 	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
 
-	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
-	$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
-	,$MODULE_SIZE,,-
-	,$ROOTFS_SIZE,,-
-	,,E,-
-	,$DATA_SIZE,,-
-	,$USER_SIZE,,-
-	__EOF__
+	if $OLD_SFDISK; then
+		sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+		$SKIP_BOOT_SIZE,$BOOT_SIZE,0xE,*
+		,$MODULE_SIZE,,-
+		,$ROOTFS_SIZE,,-
+		,,E,-
+		,$DATA_SIZE,,-
+		,$USER_SIZE,,-
+		__EOF__
+	else
+		sudo sfdisk $DEVICE <<-__EOF__
+		${SKIP_BOOT_SIZE}MiB,${BOOT_SIZE}MiB,0xE,*
+		8MiB,${MODULE_SIZE}MiB,,-
+		8MiB,${ROOTFS_SIZE}MiB,,-
+		8MiB,,E,-
+		,${DATA_SIZE}MiB,,-
+		,${USER_SIZE}MiB,,-
+		__EOF__
+	fi
 
 	if [ "$BOOT_PART_TYPE" == "vfat" ]; then
-		sudo su -c "mkfs.vfat -F 16 $DEVICE$BOOTPART -n $BOOT"
+		sudo su -c "mkfs.vfat -F 16 $DEVICE$PART$BOOTPART -n $BOOT"
 	elif [ "$BOOT_PART_TYPE" == "ext4" ]; then
-		sudo su -c "mkfs.ext4 -q $DEVICE$BOOTPART -L $BOOT -F"
+		sudo su -c "mkfs.ext4 -q $DEVICE$PART$BOOTPART -L $BOOT -F"
 	fi
-	sudo su -c "mkfs.ext4 -q $DEVICE$MODULESPART -L $MODULE -F"
-	sudo su -c "mkfs.ext4 -q $DEVICE$ROOTFSPART -L $ROOTFS -F"
-	sudo su -c "mkfs.ext4 -q $DEVICE$SYSTEMDATAPART -L $SYSTEMDATA -F"
-	sudo su -c "mkfs.ext4 -q $DEVICE$USERPART -L $USER -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$MODULESPART -L $MODULE -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$ROOTFSPART -L $ROOTFS -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$SYSTEMDATAPART -L $SYSTEMDATA -F"
+	sudo su -c "mkfs.ext4 -q $DEVICE$PART$USERPART -L $USER -F"
 }
 
 function clear_sdcard {
 	test "$DEVICE" != "" || die "Please, enter disk name. /dev/sd[x]"
+	if [[ "$DEVICE" == *"mmcblk"* ]]; then
+		PART="p"
+	fi
+
+	VER_SFDISK=(`sfdisk -v | awk '{print $4}' |sed -e s/[.]/' '/g`)
+	if [ ${VER_SFDISK[0]} -ge 2 ]; then
+		if [ ${VER_SFDISK[0]} -gt 2 ] || [ ${VER_SFDISK[1]} -ge 26 ]; then
+			OLD_SFDISK=false
+		fi
+	fi
 
 	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
 	for mnt in $MOUNT_LIST
@@ -405,11 +449,17 @@ function clear_sdcard {
 	echo "Remove partition table..." $USER_SIZE
 	sudo su -c "dd if=/dev/zero of=$DEVICE bs=512 count=1 conv=notrunc"
 
-	sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
-	4,$USER_SIZE,0xE,*
-	__EOF__
+	if $OLD_SFDISK; then
+		sudo sfdisk --in-order --Linux --unit M $DEVICE <<-__EOF__
+		4,$USER_SIZE,0xE,*
+		__EOF__
+	else
+		sudo sfdisk $DEVICE <<-__EOF__
+		4,${USER_SIZE}MiB,0xE,*
+		__EOF__
+	fi
 
-	sudo su -c "mkfs.ext4 -q ${DEVICE}1 -L SDCARD -F"
+	sudo su -c "mkfs.ext4 -q ${DEVICE}${PART}1 -L SDCARD -F"
 }
 
 function repartition_sd {
@@ -423,28 +473,34 @@ function repartition_sd {
 }
 
 function fuse_images {
+	MOUNT_LIST=`sudo mount | grep $DEVICE | awk '{print $1}'`
+	for mnt in $MOUNT_LIST
+	do
+		sudo umount $mnt
+	done
+
 	if [ -f $TARGET_DIR/$SDBOOTIMG ]; then
 		sudo su -c "dd if=$TARGET_DIR/$SDBOOTIMG of=$DEVICE bs=512 seek=1 skip=1"
 	fi
 
 	if [ -f $TARGET_DIR/$BOOTIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$BOOTIMG of=$DEVICE$BOOTPART bs=1M"
+		sudo su -c "dd if=$TARGET_DIR/$BOOTIMG of=$DEVICE$PART$BOOTPART bs=1M"
 	fi
 
 	if [ -f $TARGET_DIR/$MODULESIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$MODULESIMG of=$DEVICE$MODULESPART bs=1M"
+		sudo su -c "dd if=$TARGET_DIR/$MODULESIMG of=$DEVICE$PART$MODULESPART bs=1M"
 	fi
 
 	if [ -f $TARGET_DIR/$ROOTFSIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$ROOTFSIMG of=$DEVICE$ROOTFSPART bs=1M"
+		sudo su -c "dd if=$TARGET_DIR/$ROOTFSIMG of=$DEVICE$PART$ROOTFSPART bs=1M"
 	fi
 
 	if [ -f $TARGET_DIR/$SYSTEMDATAIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$SYSTEMDATAIMG of=$DEVICE$SYSTEMDATAPART bs=1M"
+		sudo su -c "dd if=$TARGET_DIR/$SYSTEMDATAIMG of=$DEVICE$PART$SYSTEMDATAPART bs=1M"
 	fi
 
 	if [ -f $TARGET_DIR/$USERIMG ]; then
-		sudo su -c "dd if=$TARGET_DIR/$USERIMG of=$DEVICE$USERPART bs=1M"
+		sudo su -c "dd if=$TARGET_DIR/$USERIMG of=$DEVICE$PART$USERPART bs=1M"
 	fi
 
 	sync; sync;
