@@ -1,0 +1,8 @@
+flash=mmc,0:2ndboot:2nd:0x200,0x10000:bl1-emmcboot.img;
+flash=mmc,0:bootloader:boot:0x10200,0x300000:bootloader.img;
+flash=mmc,0:env:env:0x310200,0x4000:params.bin;
+flash=mmc,0:boot:ext4:0x400000,0x2000000:boot.img;
+flash=mmc,0:modules:ext4:0x2400000,0x2000000:modules.img;
+flash=mmc,0:rootfs:ext4:0x4400000,0x80000000:rootfs.img;
+flash=mmc,0:system-data:ext4:0x84500000,0x40000000:system-data.img;
+flash=mmc,0:user:ext4:0xC4500000,0:user.img;

@@ -2,7 +2,7 @@
 
 DEVICE=""
 MODEL=""
-MODEL_LIST=("artik5" "artik10" "artik710")
+MODEL_LIST=("artik5" "artik10" "artik530" "artik710")
 FORMAT=false
 CLEARSDCARD=false
 RECOVERY=false
@@ -46,6 +46,14 @@ function setup_env {
 		env_offset=4159
 		sdboot_files=("bl1.bin" "bl2.bin" "u-boot.bin" "tzsw.bin")
 		sdboot_offsets=(1 31 63 2111)
+	elif [ $MODEL = "artik530" ]; then
+		kernel_dtb="s5p4418-artik530-raptor-*"
+		kernel=zImage
+		boot_part_type=ext4
+		env_offset=6273
+		recovery_boot_files=("partmap_emmc.txt" "bl1-emmcboot.img" "bootloader.img")
+		sdboot_files=("bl1-sdboot.img" "bootloader.img")
+		sdboot_offsets=(1 129)
 	elif [ $MODEL = "artik710" ]; then
 		kernel_dtb="s5p6818-artik710-raptor-*"
 		kernel=Image

@@ -23,7 +23,7 @@ package_check()
 set_envs()
 {
 	if [ $# -lt 1 ]; then
-		echo "Usage: ./build.sh [artik10|artik5|artik710]"
+		echo "Usage: ./build.sh [artik10|artik5|artik530|artik710]"
 		exit
 	elif [ "$1" = "artik5" ]; then
 		chip_name=espresso3250
@@ -46,6 +46,17 @@ set_envs()
 		kernel_defconfig=artik10_defconfig
 		kernel_dtb=exynos5422-artik10.dtb
 		kernel_dir=linux-3.10-artik
+		kernel_image=zImage
+	elif [ "$1" = "artik530" ]; then
+		chip_name=s5p4418
+		uboot_defconfig=artik530_raptor_config
+		uboot_spl=
+		uboot_image=bootloader.img
+		uboot_dir=u-boot-artik7
+		uboot_env_section=.rodata.default_environment
+		kernel_defconfig=artik530_raptor_defconfig
+		kernel_dtb=s5p4418-artik530-raptor-*.dtb
+		kernel_dir=linux-artik7
 		kernel_image=zImage
 	elif [ "$1" = "artik710" ]; then
 		export ARCH=arm64
